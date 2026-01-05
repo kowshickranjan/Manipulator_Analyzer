@@ -22,12 +22,6 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ---------------------------------------------------
-# SESSION STATE INIT
-# ---------------------------------------------------
-if "xgb_model" not in st.session_state:
-    st.session_state["xgb_model"] = None
-
-# ---------------------------------------------------
 # PAGE CONFIG
 # ---------------------------------------------------
 st.set_page_config(
@@ -65,7 +59,7 @@ h1, h2, h3, h4 { color: #f5c518; }
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------
-# EVALUATION FUNCTION
+# EVALUCTION FUNCTION
 # ---------------------------------------------------
 def evaluate(y_true, y_pred, y_prob):
     return {
@@ -122,11 +116,6 @@ PARAM_GRIDS = {
 # ---------------------------------------------------
 def needs_scaling(model_name):
     return model_name in ["SVM", "KNN"]
-
-# ---------------------------------------------------
-# FIXED FEATURE ORDER
-# ---------------------------------------------------
-FEATURE_ORDER = ["DSRI", "GMI", "AQI", "SGI", "DEPI", "SGAI", "ACCR", "LEVI"]
 
 # ---------------------------------------------------
 # UI
@@ -212,15 +201,29 @@ if uploaded_file:
                         **metrics
                     })
 
-                    if model_name == "XGBoost":
-                        st.session_state["xgb_model"] = best_estimator
-
             # Results table
             results_df = pd.DataFrame(results).round(4)
             st.subheader("📊 Model Comparison Results")
             st.dataframe(results_df)
 
-            # Beneish baseline — ✅ FIXED: added missing closing parenthesis
+            # --- SELECT BEST MODEL (Recall > Accuracy) ---
+            best_model_row = results_df.sort_values(
+                by=["Recall", "Accuracy"], ascending=False
+            ).iloc[0]
+
+            st.success(
+                f"""
+🏆 **Best Performing Model** (Prioritizing Recall for Fraud Detection)
+
+• **Model:** {best_model_row['Model']}  
+• **Recall:** {best_model_row['Recall']:.4f}  
+• **Accuracy:** {best_model_row['Accuracy']:.4f}  
+• **F1-score:** {best_model_row['F1-score']:.4f}  
+• **ROC-AUC:** {best_model_row['ROC-AUC']:.4f}
+"""
+            )
+
+            # Beneish baseline
             st.markdown("---")
             st.subheader("📉 Beneish M-Score Baseline")
             st.dataframe(pd.DataFrame([{
@@ -229,38 +232,7 @@ if uploaded_file:
                 "Recall": 0.5000,
                 "F1-score": 0.5263,
                 "ROC-AUC": 0.9044
-            }]).round(4))  # <-- This line was missing a )
-
-            # --- USER INPUT FOR PREDICTION (XGBoost ONLY) ---
-            st.markdown("---")
-            st.subheader("🔮 Predict Using XGBoost")
-
-            col1, col2, col3, col4 = st.columns(4)
-            inputs = {}
-            with col1:
-                inputs["DSRI"] = st.number_input("DSRI", value=1.0, format="%.4f")
-                inputs["DEPI"] = st.number_input("DEPI", value=1.0, format="%.4f")
-            with col2:
-                inputs["GMI"] = st.number_input("GMI", value=1.0, format="%.4f")
-                inputs["SGAI"] = st.number_input("SGAI", value=1.0, format="%.4f")
-            with col3:
-                inputs["AQI"] = st.number_input("AQI", value=1.0, format="%.4f")
-                inputs["ACCR"] = st.number_input("ACCR", value=0.0, format="%.4f")
-            with col4:
-                inputs["SGI"] = st.number_input("SGI", value=1.0, format="%.4f")
-                inputs["LEVI"] = st.number_input("LEVI", value=1.0, format="%.4f")
-
-            user_X = pd.DataFrame([inputs])[FEATURE_ORDER]
-
-            xgb_model = st.session_state["xgb_model"]
-            pred = xgb_model.predict(user_X)[0]
-            prob = xgb_model.predict_proba(user_X)[0, 1]
-
-            st.markdown("### 🧾 XGBoost Prediction Result")
-            if pred == 1:
-                st.error(f"⚠️ **Earnings Manipulation Likely** (Probability: {prob:.2%})")
-            else:
-                st.success(f"✅ **No Manipulation Detected** (Probability of Manipulation: {prob:.2%})")
+            }]).round(4))
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
