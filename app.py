@@ -24,11 +24,9 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------
 # SESSION STATE INIT
 # ---------------------------------------------------
-if "model_ready" not in st.session_state:
-    st.session_state["model_ready"] = False
-    st.session_state["best_model"] = None
-    st.session_state["scaler"] = None
-    st.session_state["best_model_name"] = None
+if "xgb_model" not in st.session_state:
+    st.session_state["xgb_model"] = None
+    st.session_state["xgb_scaler"] = None  # XGBoost doesn't need scaling, but kept for consistency
 
 # ---------------------------------------------------
 # PAGE CONFIG
@@ -127,6 +125,11 @@ def needs_scaling(model_name):
     return model_name in ["SVM", "KNN"]
 
 # ---------------------------------------------------
+# FIXED FEATURE ORDER (to prevent XGBoost mismatch)
+# ---------------------------------------------------
+FEATURE_ORDER = ["DSRI", "GMI", "AQI", "SGI", "DEPI", "SGAI", "ACCR", "LEVI"]
+
+# ---------------------------------------------------
 # UI
 # ---------------------------------------------------
 st.title("📊 Earnings Manipulation Classification Dashboard")
@@ -176,9 +179,8 @@ if uploaded_file:
 
             results = []
 
-            with st.spinner("Training models..."):
+            with st.spinner("Training all models..."):
                 for model_name, model in MODELS.items():
-
                     X_tr, X_te = X_train, X_test
 
                     if needs_scaling(model_name):
@@ -204,7 +206,6 @@ if uploaded_file:
 
                     y_pred = best_estimator.predict(X_te)
                     y_prob = best_estimator.predict_proba(X_te)[:, 1]
-
                     metrics = evaluate(y_test, y_pred, y_prob)
 
                     results.append({
@@ -212,49 +213,14 @@ if uploaded_file:
                         **metrics
                     })
 
-                    # Save the best estimator temporarily for final retrain
-                    if model_name == list(MODELS.keys())[0]:
-                        temp_models = {}
-                    temp_models[model_name] = (best_estimator, scaler)
+                    # Save XGBoost model separately for prediction
+                    if model_name == "XGBoost":
+                        st.session_state["xgb_model"] = best_estimator
 
             # Results table
             results_df = pd.DataFrame(results).round(4)
-
             st.subheader("📊 Model Comparison Results")
             st.dataframe(results_df)
-
-            # --- CHOOSE BEST MODEL: Prioritize Recall, then Accuracy ---
-            best_model_row = results_df.sort_values(
-                by=["Recall", "Accuracy"], ascending=False
-            ).iloc[0]
-            best_model_name = best_model_row["Model"]
-
-            # Retrain best model on full training set
-            best_model_obj, scaler = temp_models[best_model_name]
-            if needs_scaling(best_model_name):
-                scaler_full = StandardScaler()
-                X_train_scaled = scaler_full.fit_transform(X_train)
-                best_model_obj.fit(X_train_scaled, y_train)
-                st.session_state["scaler"] = scaler_full
-            else:
-                best_model_obj.fit(X_train, y_train)
-                st.session_state["scaler"] = None
-
-            st.session_state["best_model"] = best_model_obj
-            st.session_state["best_model_name"] = best_model_name
-            st.session_state["model_ready"] = True
-
-            st.success(
-                f"""
-🏆 **Best Performing Algorithm** (Prioritizing Recall)
-
-• **Model:** {best_model_name}  
-• **ROC-AUC:** {best_model_row['ROC-AUC']}  
-• **F1-score:** {best_model_row['F1-score']}  
-• **Recall:** {best_model_row['Recall']}  
-• **Accuracy:** {best_model_row['Accuracy']}
-"""
-            )
 
             # Beneish baseline
             st.markdown("---")
@@ -267,9 +233,9 @@ if uploaded_file:
                 "ROC-AUC": 0.9044
             }]).round(4))
 
-            # --- USER INPUT FOR PREDICTION ---
+            # --- USER INPUT FOR PREDICTION (XGBoost ONLY) ---
             st.markdown("---")
-            st.subheader("🔮 Predict Manipulation for New Observation")
+            st.subheader("🔮 Predict Using XGBoost")
 
             col1, col2, col3, col4 = st.columns(4)
             inputs = {}
@@ -286,29 +252,26 @@ if uploaded_file:
                 inputs["SGI"] = st.number_input("SGI", value=1.0, format="%.4f")
                 inputs["LEVI"] = st.number_input("LEVI", value=1.0, format="%.4f")
 
-            user_X = pd.DataFrame([inputs])
+            # 👇 Enforce correct feature order to match training
+            user_X = pd.DataFrame([inputs])[FEATURE_ORDER]
 
-            # Apply scaling if needed
-            if st.session_state["scaler"]:
-                user_X_scaled = st.session_state["scaler"].transform(user_X)
-            else:
-                user_X_scaled = user_X
+            # XGBoost does NOT require scaling, so use raw values
+            xgb_model = st.session_state["xgb_model"]
+            pred = xgb_model.predict(user_X)[0]
+            prob = xgb_model.predict_proba(user_X)[0, 1]
 
-            # Predict
-            model = st.session_state["best_model"]
-            pred = model.predict(user_X_scaled)[0]
-            prob = model.predict_proba(user_X_scaled)[0, 1]
-
-            st.markdown("### 🧾 Prediction Result")
+            st.markdown("### 🧾 XGBoost Prediction Result")
             if pred == 1:
                 st.error(f"⚠️ **Earnings Manipulation Likely** (Probability: {prob:.2%})")
             else:
                 st.success(f"✅ **No Manipulation Detected** (Probability of Manipulation: {prob:.2%})")
-
-            st.info(f"Model used: **{st.session_state['best_model_name']}**")
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
 
 else:
     st.info("👆 Upload an Excel file to start analysis.")
+
+else:
+    st.info("👆 Upload an Excel file to start analysis.")
+
