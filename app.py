@@ -22,6 +22,15 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ---------------------------------------------------
+# SESSION STATE INIT
+# ---------------------------------------------------
+if "model_ready" not in st.session_state:
+    st.session_state["model_ready"] = False
+    st.session_state["best_model"] = None
+    st.session_state["scaler"] = None
+    st.session_state["best_model_name"] = None
+
+# ---------------------------------------------------
 # PAGE CONFIG
 # ---------------------------------------------------
 st.set_page_config(
@@ -176,6 +185,8 @@ if uploaded_file:
                         scaler = StandardScaler()
                         X_tr = scaler.fit_transform(X_train)
                         X_te = scaler.transform(X_test)
+                    else:
+                        scaler = None
 
                     if use_tuning:
                         grid = GridSearchCV(
@@ -186,12 +197,13 @@ if uploaded_file:
                             n_jobs=-1
                         )
                         grid.fit(X_tr, y_train)
-                        model = grid.best_estimator_
+                        best_estimator = grid.best_estimator_
                     else:
                         model.fit(X_tr, y_train)
+                        best_estimator = model
 
-                    y_pred = model.predict(X_te)
-                    y_prob = model.predict_proba(X_te)[:, 1]
+                    y_pred = best_estimator.predict(X_te)
+                    y_prob = best_estimator.predict_proba(X_te)[:, 1]
 
                     metrics = evaluate(y_test, y_pred, y_prob)
 
@@ -200,25 +212,47 @@ if uploaded_file:
                         **metrics
                     })
 
+                    # Save the best estimator temporarily for final retrain
+                    if model_name == list(MODELS.keys())[0]:
+                        temp_models = {}
+                    temp_models[model_name] = (best_estimator, scaler)
+
             # Results table
             results_df = pd.DataFrame(results).round(4)
 
             st.subheader("📊 Model Comparison Results")
             st.dataframe(results_df)
 
-            # Best model selection
-            best_model = results_df.sort_values(
-                by="ROC-AUC", ascending=False
+            # --- CHOOSE BEST MODEL: Prioritize Recall, then Accuracy ---
+            best_model_row = results_df.sort_values(
+                by=["Recall", "Accuracy"], ascending=False
             ).iloc[0]
+            best_model_name = best_model_row["Model"]
+
+            # Retrain best model on full training set
+            best_model_obj, scaler = temp_models[best_model_name]
+            if needs_scaling(best_model_name):
+                scaler_full = StandardScaler()
+                X_train_scaled = scaler_full.fit_transform(X_train)
+                best_model_obj.fit(X_train_scaled, y_train)
+                st.session_state["scaler"] = scaler_full
+            else:
+                best_model_obj.fit(X_train, y_train)
+                st.session_state["scaler"] = None
+
+            st.session_state["best_model"] = best_model_obj
+            st.session_state["best_model_name"] = best_model_name
+            st.session_state["model_ready"] = True
 
             st.success(
                 f"""
-🏆 **Best Performing Algorithm**
+🏆 **Best Performing Algorithm** (Prioritizing Recall)
 
-• **Model:** {best_model['Model']}  
-• **ROC-AUC:** {best_model['ROC-AUC']}  
-• **F1-score:** {best_model['F1-score']}  
-• **Recall:** {best_model['Recall']}
+• **Model:** {best_model_name}  
+• **ROC-AUC:** {best_model_row['ROC-AUC']}  
+• **F1-score:** {best_model_row['F1-score']}  
+• **Recall:** {best_model_row['Recall']}  
+• **Accuracy:** {best_model_row['Accuracy']}
 """
             )
 
@@ -232,6 +266,46 @@ if uploaded_file:
                 "F1-score": 0.5263,
                 "ROC-AUC": 0.9044
             }]).round(4))
+
+            # --- USER INPUT FOR PREDICTION ---
+            st.markdown("---")
+            st.subheader("🔮 Predict Manipulation for New Observation")
+
+            col1, col2, col3, col4 = st.columns(4)
+            inputs = {}
+            with col1:
+                inputs["DSRI"] = st.number_input("DSRI", value=1.0, format="%.4f")
+                inputs["DEPI"] = st.number_input("DEPI", value=1.0, format="%.4f")
+            with col2:
+                inputs["GMI"] = st.number_input("GMI", value=1.0, format="%.4f")
+                inputs["SGAI"] = st.number_input("SGAI", value=1.0, format="%.4f")
+            with col3:
+                inputs["AQI"] = st.number_input("AQI", value=1.0, format="%.4f")
+                inputs["ACCR"] = st.number_input("ACCR", value=0.0, format="%.4f")
+            with col4:
+                inputs["SGI"] = st.number_input("SGI", value=1.0, format="%.4f")
+                inputs["LEVI"] = st.number_input("LEVI", value=1.0, format="%.4f")
+
+            user_X = pd.DataFrame([inputs])
+
+            # Apply scaling if needed
+            if st.session_state["scaler"]:
+                user_X_scaled = st.session_state["scaler"].transform(user_X)
+            else:
+                user_X_scaled = user_X
+
+            # Predict
+            model = st.session_state["best_model"]
+            pred = model.predict(user_X_scaled)[0]
+            prob = model.predict_proba(user_X_scaled)[0, 1]
+
+            st.markdown("### 🧾 Prediction Result")
+            if pred == 1:
+                st.error(f"⚠️ **Earnings Manipulation Likely** (Probability: {prob:.2%})")
+            else:
+                st.success(f"✅ **No Manipulation Detected** (Probability of Manipulation: {prob:.2%})")
+
+            st.info(f"Model used: **{st.session_state['best_model_name']}**")
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
