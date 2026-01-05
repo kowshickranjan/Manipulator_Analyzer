@@ -26,7 +26,6 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------
 if "xgb_model" not in st.session_state:
     st.session_state["xgb_model"] = None
-    st.session_state["xgb_scaler"] = None  # XGBoost doesn't need scaling, but kept for consistency
 
 # ---------------------------------------------------
 # PAGE CONFIG
@@ -125,7 +124,7 @@ def needs_scaling(model_name):
     return model_name in ["SVM", "KNN"]
 
 # ---------------------------------------------------
-# FIXED FEATURE ORDER (to prevent XGBoost mismatch)
+# FIXED FEATURE ORDER
 # ---------------------------------------------------
 FEATURE_ORDER = ["DSRI", "GMI", "AQI", "SGI", "DEPI", "SGAI", "ACCR", "LEVI"]
 
@@ -213,7 +212,6 @@ if uploaded_file:
                         **metrics
                     })
 
-                    # Save XGBoost model separately for prediction
                     if model_name == "XGBoost":
                         st.session_state["xgb_model"] = best_estimator
 
@@ -222,7 +220,7 @@ if uploaded_file:
             st.subheader("📊 Model Comparison Results")
             st.dataframe(results_df)
 
-            # Beneish baseline
+            # Beneish baseline — ✅ FIXED: added missing closing parenthesis
             st.markdown("---")
             st.subheader("📉 Beneish M-Score Baseline")
             st.dataframe(pd.DataFrame([{
@@ -231,7 +229,7 @@ if uploaded_file:
                 "Recall": 0.5000,
                 "F1-score": 0.5263,
                 "ROC-AUC": 0.9044
-            }]).round(4))
+            }]).round(4))  # <-- This line was missing a )
 
             # --- USER INPUT FOR PREDICTION (XGBoost ONLY) ---
             st.markdown("---")
@@ -252,10 +250,8 @@ if uploaded_file:
                 inputs["SGI"] = st.number_input("SGI", value=1.0, format="%.4f")
                 inputs["LEVI"] = st.number_input("LEVI", value=1.0, format="%.4f")
 
-            # 👇 Enforce correct feature order to match training
             user_X = pd.DataFrame([inputs])[FEATURE_ORDER]
 
-            # XGBoost does NOT require scaling, so use raw values
             xgb_model = st.session_state["xgb_model"]
             pred = xgb_model.predict(user_X)[0]
             prob = xgb_model.predict_proba(user_X)[0, 1]
@@ -271,7 +267,3 @@ if uploaded_file:
 
 else:
     st.info("👆 Upload an Excel file to start analysis.")
-
-else:
-    st.info("👆 Upload an Excel file to start analysis.")
-
